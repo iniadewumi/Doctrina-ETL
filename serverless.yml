@@ -1,0 +1,81 @@
+service: doctrina-data
+
+provider:
+  name: aws
+  runtime: python3.8
+  deploymentBucket:
+    name: zdeploy-${self:provider.stage}-${self:custom.awsAccountId}
+  environment:
+    # NotificationsTopicArn: ${self:custom.notificationsTopicArn}
+    Region: '${self:provider.region}'
+    DATA_BUCKET: ${self:custom.dataBucket}
+
+custom:
+  prune:
+    automatic: true
+    includeLayers: true
+    number: 3
+
+layers:
+  general:
+    name: ${self:custom.appName}_general_python_layer
+    path: pythonLayers/general
+  pandas:
+    name: ${self:custom.appName}_pandas_layer
+    path: pythonLayers/pandas
+
+package:
+  individually: true
+
+functions:
+  download:
+    handler: download/handler.handler
+    timeout: 900 # 15 minutes
+    memorySize: 10240
+    maximumRetryAttempts: 0
+    package:
+      exclude:
+        - "**"
+        - "*/**"
+      include:
+        - "download/**"
+    layers:
+      - !Ref GeneralLambdaLayer
+    events:
+      - schedule:
+          name: NPPES-data-download
+          description: 'This cron is for downloading the monthly NPPES data files'
+          rate: cron(0 12 5 * ? *) #12 noon GMT at the 5th of every month
+          enabled: true
+          input:
+            url: 'https://download.cms.gov/nppes/NPPES_Data_Dissemination_${now_month_text}_${now_year}.zip'
+            output: 'nppes/year=${now_year}/month=${now_month_02}/NPPES_Data_Dissemination_${now_month_text}_${now_year}.zip'
+      - schedule:
+          name: Taxonomy-data-download
+          description: 'This cron is for downloading the Taxanomy definition files'
+          rate: cron(0 12 5 1/6 ? *) #12 noon GMT on the 5th every 6 months
+          enabled: true
+          input:
+            url: 'https://data.cms.gov/data-api/v1/dataset/88bd5fb4-7b5c-4107-8131-23c485e00ef0/data'
+            output: 'taxonomy/CROSSWALK_MEDICARE_PROVIDER_SUPPLIER_to_HEALTHCARE_PROVIDER_TAXONOMY.json'
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - logs:CreateLogGroup
+        Resource: arn:aws:logs:${self:provider.region}:${self:custom.awsAccountId}:log-group:/aws/lambda/*:*
+      - Effect: Allow
+        Action:
+          - s3:*
+        Resource: arn:aws:s3:::${self:custom.dataBucket}*
+      - Effect: Allow
+        Action:
+          - kms:GenerateDataKey
+          - kms:Decrypt
+          - kms:Encrypt
+        Resource: '*'
+
+plugins:
+  - serverless-plugin-parent
+  - serverless-iam-roles-per-function
+  - serverless-deployment-bucket
+  - serverless-prune-plugin
